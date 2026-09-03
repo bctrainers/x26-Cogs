@@ -41,6 +41,70 @@ VALID_VAR_NAME_CHARS = string.ascii_letters + string.digits + "_"
 
 log = logging.getLogger("red.x26cogs.defender")
 
+# Canonical comparison operators plus word/symbol aliases.
+# Reuse via check_operator() from any Warden model (MessageHasAttachment, Compare, …).
+COMPARISON_OPERATORS = ("==", "!=", ">", ">=", "<", "<=")
+COMPARISON_OPERATOR_ALIASES = {
+    "==": "==",
+    "=": "==",
+    "eq": "==",
+    "equal": "==",
+    "equals": "==",
+    "equal-to": "==",
+    "!=": "!=",
+    "ne": "!=",
+    "not-equal": "!=",
+    "not-equals": "!=",
+    "not-equal-to": "!=",
+    ">": ">",
+    "gt": ">",
+    "greater-than": ">",
+    "more-than": ">",
+    "<": "<",
+    "lt": "<",
+    "less-than": "<",
+    ">=": ">=",
+    "gte": ">=",
+    "ge": ">=",
+    "greater-than-or-equal": ">=",
+    "greater-than-or-equal-to": ">=",
+    "more-than-or-equal": ">=",
+    "more-than-or-equal-to": ">=",
+    "at-least": ">=",
+    "<=": "<=",
+    "lte": "<=",
+    "le": "<=",
+    "less-than-or-equal": "<=",
+    "less-than-or-equal-to": "<=",
+    "at-most": "<=",
+}
+
+
+def check_operator(v, extra: Optional[Dict[str, str]] = None, allow_none: bool = True) -> Optional[str]:
+    """Normalize an operator to its canonical symbol.
+
+    Accepts ``>=`` and words like ``greater-than-or-equal``. Pass ``extra`` for
+    condition-specific operators (e.g. Compare's ``contains``).
+    """
+    if v is None or v == "":
+        if allow_none:
+            return None
+        raise ValueError("operator is required")
+    key = str(v).strip().lower().replace(" ", "-")
+    allowed = COMPARISON_OPERATOR_ALIASES if extra is None else {**COMPARISON_OPERATOR_ALIASES, **extra}
+    try:
+        return allowed[key]
+    except KeyError:
+        extras = ", ".join(sorted(set(extra.values()))) if extra else ""
+        hint = ", ".join(COMPARISON_OPERATORS)
+        if extras:
+            hint = f"{hint}, {extras}"
+        raise ValueError(
+            f"Unknown operator '{v}'. Use {hint} or words like "
+            "equal-to, not-equal, greater-than, less-than, "
+            "greater-than-or-equal, less-than-or-equal."
+        ) from None
+
 
 class BaseModel(PydanticBaseModel):
     _single_value: ClassVar[bool] = False
@@ -196,12 +260,15 @@ class Compare(BaseModel):
 
     @field_validator("operator")
     @classmethod
-    def check_empty_split(cls, v):
-        allowed = ("==", "contains", "contains-pattern", ">=", "<=", "<", ">", "!=")
-        if isinstance(v, str):
-            if v.lower() not in allowed:
-                raise ValueError("Unknown operator")
-        return v
+    def _check_operator(cls, v):
+        return check_operator(
+            v,
+            extra={
+                "contains": "contains",
+                "contains-pattern": "contains-pattern",
+            },
+            allow_none=False,
+        )
 
 
 class EmbedField(BaseModel):
@@ -562,51 +629,8 @@ class MessageHasAttachment(BaseModel):
 
     @field_validator("operator")
     @classmethod
-    def check_operator(cls, v):
-        if v is None:
-            return v
-        key = str(v).strip().lower().replace(" ", "-")
-        allowed = {
-            "==": "==",
-            "=": "==",
-            "eq": "==",
-            "equal": "==",
-            "equals": "==",
-            "equal-to": "==",
-            "!=": "!=",
-            "ne": "!=",
-            "not-equal": "!=",
-            "not-equals": "!=",
-            "not-equal-to": "!=",
-            ">": ">",
-            "gt": ">",
-            "greater-than": ">",
-            "more-than": ">",
-            "<": "<",
-            "lt": "<",
-            "less-than": "<",
-            ">=": ">=",
-            "gte": ">=",
-            "ge": ">=",
-            "greater-than-or-equal": ">=",
-            "greater-than-or-equal-to": ">=",
-            "more-than-or-equal": ">=",
-            "more-than-or-equal-to": ">=",
-            "at-least": ">=",
-            "<=": "<=",
-            "lte": "<=",
-            "le": "<=",
-            "less-than-or-equal": "<=",
-            "less-than-or-equal-to": "<=",
-            "at-most": "<=",
-        }
-        if key not in allowed:
-            raise ValueError(
-                "Unknown operator. Use ==, !=, >, >=, <, <= or words like "
-                "equal-to, not-equal, greater-than, less-than, "
-                "greater-than-or-equal, less-than-or-equal."
-            )
-        return allowed[key]
+    def _check_operator(cls, v):
+        return check_operator(v)
 
     @pydantic_model_validator(mode="after")
     def check_count_operator(cls, values):
