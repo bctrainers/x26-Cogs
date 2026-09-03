@@ -58,6 +58,34 @@ URL_RE = re.compile(
 )
 MAX_NESTED = 10
 
+_EXT_ALIASES = {"jpeg": "jpg", "tiff": "tif", "html": "htm", "svg+xml": "svg"}
+
+
+def attachment_extension(attachment) -> str:
+    name = getattr(attachment, "filename", "") or ""
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    if not ext:
+        ctype = getattr(attachment, "content_type", None) or ""
+        if "/" in ctype:
+            ext = ctype.split("/", 1)[1].split(";", 1)[0].strip().lower()
+    return _EXT_ALIASES.get(ext, ext)
+
+
+def compare_attachment_count(n: int, operator: str, count: int) -> bool:
+    if operator == "==":
+        return n == count
+    if operator == "!=":
+        return n != count
+    if operator == ">=":
+        return n >= count
+    if operator == "<=":
+        return n <= count
+    if operator == ">":
+        return n > count
+    if operator == "<":
+        return n < count
+    return n == count
+
 CHECKS_MODULES_EVENTS = {
     ChecksKeys.CommentAnalysis: Event.OnMessage,
     ChecksKeys.InviteFilter: Event.OnMessage,
@@ -165,6 +193,11 @@ class WDRuntime:
                     "parent_id": "",
                     "parent_mention": "",
                     "parent_heat": "",
+                    "attachment_count": len(message.attachments),
+                    "attachment_filenames": ", ".join(getattr(a, "filename", "") for a in message.attachments),
+                    "attachment_types": ", ".join(
+                        sorted({attachment_extension(a) for a in message.attachments if attachment_extension(a)})
+                    ),
                 }
             )
             if message.attachments:
@@ -761,8 +794,16 @@ class WardenRule:
             return in_emergency is params.value
 
         @checker(Condition.MessageHasAttachment)
-        async def message_has_attachment(params: models.IsBool):
-            return bool(message.attachments) is params.value
+        async def message_has_attachment(params: models.MessageHasAttachment):
+            attachments = message.attachments or []
+            if params.file_type:
+                wanted = {_EXT_ALIASES.get(t, t) for t in params.file_type}
+                n = sum(1 for a in attachments if attachment_extension(a) in wanted)
+            else:
+                n = len(attachments)
+            if params.count is None:
+                return n > 0
+            return compare_attachment_count(n, params.operator or "==", params.count)
 
         @checker(Condition.UserHasAnyRoleIn)
         async def user_has_any_role_in(params: models.NonEmptyList):

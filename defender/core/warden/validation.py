@@ -22,6 +22,8 @@ from pydantic_core import PydanticCustomError, CoreSchema, core_schema
 from pydantic import (
     BaseModel as PydanticBaseModel,
     ConfigDict,
+    Field,
+    AliasChoices,
     field_validator,
     model_validator as pydantic_model_validator,
 )
@@ -489,6 +491,130 @@ class IsInt(BaseModel):
     value: int
 
 
+class MessageHasAttachment(BaseModel):
+    """Parameters for the message-has-attachment condition.
+
+    Legacy short form (unchanged):
+        message-has-attachment: true
+        message-has-attachment: false
+
+    Count short form:
+        message-has-attachment: 3
+        message-has-attachment: [3, ">="]
+        message-has-attachment: [3, greater-than-or-equal]
+
+    Long form:
+        message-has-attachment:
+            file-type: jpg
+            count: 3
+            operator: ">="
+    """
+
+    _short_form = ("count", "operator")
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        coerce_numbers_to_str=True,
+        populate_by_name=True,
+    )
+    count: Optional[conint(ge=0, le=50)] = None
+    operator: Optional[str] = None
+    file_type: Optional[List[str]] = Field(
+        default=None,
+        validation_alias=AliasChoices("file_type", "file-type"),
+    )
+
+    @pydantic_model_validator(mode="before")
+    @classmethod
+    def coerce_legacy_bool(cls, data):
+        # Stock rules pass a bare bool. Warden packs that onto `count`.
+        if isinstance(data, dict):
+            count = data.get("count")
+            if count is True or count == "true":
+                data = dict(data)
+                data["count"] = 1
+                if data.get("operator") in (None, True):
+                    data["operator"] = ">="
+            elif count is False or count == "false":
+                data = dict(data)
+                data["count"] = 0
+                if data.get("operator") in (None, False):
+                    data["operator"] = "=="
+        return data
+
+    @field_validator("file_type", mode="before")
+    @classmethod
+    def normalize_file_type(cls, v):
+        if v is None or v == "":
+            return None
+        items = v if isinstance(v, list) else [v]
+        out = []
+        for item in items:
+            s = str(item).strip().lower().lstrip(".")
+            if not s or len(s) > 10 or not s.replace("+", "").isalnum():
+                raise ValueError(
+                    f"Invalid file-type '{item}'. Use an extension like jpg, png, txt, pdf."
+                )
+            out.append(s)
+        if not out:
+            return None
+        return out
+
+    @field_validator("operator")
+    @classmethod
+    def check_operator(cls, v):
+        if v is None:
+            return v
+        key = str(v).strip().lower().replace(" ", "-")
+        allowed = {
+            "==": "==",
+            "=": "==",
+            "eq": "==",
+            "equal": "==",
+            "equals": "==",
+            "equal-to": "==",
+            "!=": "!=",
+            "ne": "!=",
+            "not-equal": "!=",
+            "not-equals": "!=",
+            "not-equal-to": "!=",
+            ">": ">",
+            "gt": ">",
+            "greater-than": ">",
+            "more-than": ">",
+            "<": "<",
+            "lt": "<",
+            "less-than": "<",
+            ">=": ">=",
+            "gte": ">=",
+            "ge": ">=",
+            "greater-than-or-equal": ">=",
+            "greater-than-or-equal-to": ">=",
+            "more-than-or-equal": ">=",
+            "more-than-or-equal-to": ">=",
+            "at-least": ">=",
+            "<=": "<=",
+            "lte": "<=",
+            "le": "<=",
+            "less-than-or-equal": "<=",
+            "less-than-or-equal-to": "<=",
+            "at-most": "<=",
+        }
+        if key not in allowed:
+            raise ValueError(
+                "Unknown operator. Use ==, !=, >, >=, <, <= or words like "
+                "equal-to, not-equal, greater-than, less-than, "
+                "greater-than-or-equal, less-than-or-equal."
+            )
+        return allowed[key]
+
+    @pydantic_model_validator(mode="after")
+    def check_count_operator(cls, values):
+        if values.operator is not None and values.count is None:
+            raise ValueError("`operator` requires `count` to be set.")
+        return values
+
+
 class IsBool(BaseModel):
     _single_value = True
     value: bool
@@ -556,7 +682,7 @@ CONDITIONS_VALIDATORS = {
     Condition.CategoryMatchesAny: NonEmptyList,
     Condition.ChannelIsPublic: IsBool,
     Condition.InEmergencyMode: IsBool,
-    Condition.MessageHasAttachment: IsBool,
+    Condition.MessageHasAttachment: MessageHasAttachment,
     Condition.UserHasAnyRoleIn: NonEmptyList,
     Condition.UserHasSentLessThanMessages: IsInt,
     Condition.MessageContainsInvite: IsBool,
