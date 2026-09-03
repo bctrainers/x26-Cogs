@@ -57,8 +57,10 @@ FAKE_CHANNEL = FakeChannel()
 
 
 class FakeAsset:
-    filename = "26.jpg"
-    url = "https://blabla"
+    def __init__(self, filename="26.jpg", url="https://blabla", content_type=None):
+        self.filename = filename
+        self.url = url
+        self.content_type = content_type
 
 
 class FakeUser:
@@ -485,6 +487,63 @@ async def test_conditions():
     await eval_cond(Condition.MessageHasAttachment, "true", True)
     await eval_cond(Condition.MessageHasAttachment, "false", False)
 
+    # count: exact match (default operator ==)
+    FAKE_MESSAGE.attachments = [FakeAsset(), FakeAsset(), FakeAsset()]
+    await eval_cond(Condition.MessageHasAttachment, {"count": 3}, True)
+    await eval_cond(Condition.MessageHasAttachment, {"count": 2}, False)
+    await eval_cond(Condition.MessageHasAttachment, 3, True)
+    await eval_cond(Condition.MessageHasAttachment, [3, "=="], True)
+    await eval_cond(Condition.MessageHasAttachment, [2, "=="], False)
+
+    # count: 0 is a valid exact match against a message with no attachments
+    FAKE_MESSAGE.attachments = []
+    await eval_cond(Condition.MessageHasAttachment, {"count": 0}, True)
+    await eval_cond(Condition.MessageHasAttachment, {"count": 1}, False)
+
+    # operators (symbols and words)
+    FAKE_MESSAGE.attachments = [FakeAsset(), FakeAsset(), FakeAsset()]
+    await eval_cond(Condition.MessageHasAttachment, {"count": 3, "operator": "=="}, True)
+    await eval_cond(Condition.MessageHasAttachment, {"count": 2, "operator": ">"}, True)
+    await eval_cond(Condition.MessageHasAttachment, {"count": 3, "operator": ">="}, True)
+    await eval_cond(Condition.MessageHasAttachment, {"count": 4, "operator": ">="}, False)
+    await eval_cond(Condition.MessageHasAttachment, {"count": 3, "operator": "<"}, False)
+    await eval_cond(Condition.MessageHasAttachment, {"count": 4, "operator": "<"}, True)
+    await eval_cond(Condition.MessageHasAttachment, {"count": 3, "operator": "<="}, True)
+    await eval_cond(Condition.MessageHasAttachment, {"count": 1, "operator": "!="}, True)
+    await eval_cond(Condition.MessageHasAttachment, {"count": 3, "operator": "!="}, False)
+    await eval_cond(Condition.MessageHasAttachment, [2, ">="], True)
+    await eval_cond(Condition.MessageHasAttachment, [4, ">="], False)
+    await eval_cond(Condition.MessageHasAttachment, {"count": 2, "operator": "greater-than"}, True)
+    await eval_cond(Condition.MessageHasAttachment, {"count": 3, "operator": "at-least"}, True)
+    await eval_cond(Condition.MessageHasAttachment, {"count": 3, "operator": "less-than"}, False)
+    await eval_cond(Condition.MessageHasAttachment, {"count": 3, "operator": "not-equal"}, False)
+    await eval_cond(Condition.MessageHasAttachment, {"count": 3, "operator": "equal-to"}, True)
+    await eval_cond(Condition.MessageHasAttachment, [3, "more-than-or-equal"], True)
+
+    # file-type filters the counted attachments
+    FAKE_MESSAGE.attachments = [
+        FakeAsset("shot.png"),
+        FakeAsset("photo.jpg"),
+        FakeAsset("scan.jpeg"),
+        FakeAsset("notes.txt"),
+    ]
+    await eval_cond(Condition.MessageHasAttachment, {"file-type": "png"}, True)
+    await eval_cond(Condition.MessageHasAttachment, {"file-type": "pdf"}, False)
+    await eval_cond(Condition.MessageHasAttachment, {"file_type": "jpg", "count": 2}, True)
+    await eval_cond(Condition.MessageHasAttachment, {"file-type": "jpeg", "count": 2}, True)
+    await eval_cond(Condition.MessageHasAttachment, {"file-type": ["png", "txt"], "count": 2}, True)
+    await eval_cond(Condition.MessageHasAttachment, {"file-type": "jpg", "count": 3, "operator": ">="}, False)
+    await eval_cond(Condition.MessageHasAttachment, {"file-type": ["jpg", "png"], "count": 2, "operator": "at-least"}, True)
+
+    # $attachment_count context variable for compare
+    FAKE_MESSAGE.attachments = [FakeAsset(), FakeAsset(), FakeAsset()]
+    await eval_cond(Condition.Compare, ["$attachment_count", ">=", "3"], True)
+    await eval_cond(Condition.Compare, ["$attachment_count", "==", "3"], True)
+    await eval_cond(Condition.Compare, ["$attachment_count", "<", "3"], False)
+    FAKE_MESSAGE.attachments = []
+    await eval_cond(Condition.Compare, ["$attachment_count", "==", "0"], True)
+    await eval_cond(Condition.Compare, ["$attachment_count", ">", "0"], False)
+
     FAKE_MESSAGE.content = "aaa 2626 aaa"
     await eval_cond(Condition.MessageContainsUrl, "true", False)
     await eval_cond(Condition.MessageContainsUrl, "false", True)
@@ -587,10 +646,29 @@ async def test_conditions():
     # This tests the "_single_value" changes. The condition should only accept a single value,
     # not a list to unpack and not a dict
     with pytest.raises(InvalidRule, match=r".*Input should be a valid boolean*"):
-        await eval_cond(Condition.MessageHasAttachment, ["true"], True)
+        await eval_cond(Condition.MessageContainsUrl, ["true"], True)
 
     with pytest.raises(InvalidRule, match=r".*Input should be a valid boolean*"):
+        await eval_cond(Condition.MessageContainsUrl, {"value": True}, True)
+
+    # message-has-attachment: value is gone; unknown keys, bad operators, operator-without-count fail
+    with pytest.raises(InvalidRule):
         await eval_cond(Condition.MessageHasAttachment, {"value": True}, True)
+
+    with pytest.raises(InvalidRule):
+        await eval_cond(Condition.MessageHasAttachment, {"count": 3, "not_a_field": 1}, True)
+
+    with pytest.raises(InvalidRule):
+        await eval_cond(Condition.MessageHasAttachment, {"operator": ">="}, True)
+
+    with pytest.raises(InvalidRule):
+        await eval_cond(Condition.MessageHasAttachment, {"count": 3, "operator": "~~"}, True)
+
+    with pytest.raises(InvalidRule):
+        await eval_cond(Condition.MessageHasAttachment, {"count": -1}, True)
+
+    with pytest.raises(InvalidRule):
+        await eval_cond(Condition.MessageHasAttachment, {"file-type": "../etc/passwd"}, True)
 
 
 @pytest.mark.asyncio
